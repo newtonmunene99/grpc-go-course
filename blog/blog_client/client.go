@@ -6,89 +6,151 @@ import (
 	"io"
 	"log"
 
-	"github.com/simplesteph/grpc-go-course/blog/blogpb"
+	"github.com/newtonmunene99/grpc-go-course/blog/blogpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 func main() {
+	fmt.Println("Blog client")
 
-	fmt.Println("Blog Client")
-
+	tls := false
 	opts := grpc.WithInsecure()
 
-	cc, err := grpc.Dial("localhost:50051", opts)
-	if err != nil {
-		log.Fatalf("could not connect: %v", err)
+	if tls {
+
+		certFile := "ssl/ca.crt"
+
+		creds, sslErr := credentials.NewClientTLSFromFile(certFile, "")
+
+		if sslErr != nil {
+			log.Fatalf("Error while loading CA trust certificate: %v", sslErr)
+			return
+		}
+
+		opts = grpc.WithTransportCredentials(creds)
 	}
-	defer cc.Close() // Maybe this should be in a separate function and the error handled?
+
+	cc, err := grpc.Dial("localhost:50051", opts)
+
+	if err != nil {
+		log.Fatalf("Could not connect: %v", err)
+	}
+
+	defer cc.Close()
 
 	c := blogpb.NewBlogServiceClient(cc)
 
-	// create Blog
-	fmt.Println("Creating the blog")
-	blog := &blogpb.Blog{
-		AuthorId: "Stephane",
-		Title:    "My First Blog",
-		Content:  "Content of the first blog",
+	// blog := createNewBlog(c)
+
+	// readBlog(c, blog.Blog.Id)
+
+	// updateBlog(c, &blogpb.Blog{
+	// 	Id:       blog.Blog.Id,
+	// 	AuthorId: "Newton",
+	// 	Title:    "Third blog",
+	// 	Content:  "Content of the third blog",
+	// })
+
+	// deleteBlog(c, blog.Blog.Id)
+
+	listBlog(c)
+}
+
+func createNewBlog(c blogpb.BlogServiceClient) *blogpb.CreateBlogResponse {
+
+	req := &blogpb.CreateBlogRequest{
+		Blog: &blogpb.Blog{
+			AuthorId: "Newton",
+			Title:    "Second blog",
+			Content:  "Content of the second blog",
+		},
 	}
-	createBlogRes, err := c.CreateBlog(context.Background(), &blogpb.CreateBlogRequest{Blog: blog})
+
+	res, err := c.CreateBlog(context.Background(), req)
+
 	if err != nil {
 		log.Fatalf("Unexpected error: %v", err)
 	}
-	fmt.Printf("Blog has been created: %v", createBlogRes)
-	blogID := createBlogRes.GetBlog().GetId()
 
-	// read Blog
-	fmt.Println("Reading the blog")
+	fmt.Printf("Blog has been created: %v\n", res)
 
-	_, err2 := c.ReadBlog(context.Background(), &blogpb.ReadBlogRequest{BlogId: "5bdc29e661b75adcac496cf4"})
-	if err2 != nil {
-		fmt.Printf("Error happened while reading: %v \n", err2)
+	return res
+}
+
+func readBlog(c blogpb.BlogServiceClient, id string) {
+
+	req := &blogpb.ReadBlogRequest{
+		BlogId: id,
 	}
 
-	readBlogReq := &blogpb.ReadBlogRequest{BlogId: blogID}
-	readBlogRes, readBlogErr := c.ReadBlog(context.Background(), readBlogReq)
-	if readBlogErr != nil {
-		fmt.Printf("Error happened while reading: %v \n", readBlogErr)
-	}
+	res, err := c.ReadBlog(context.Background(), req)
 
-	fmt.Printf("Blog was read: %v \n", readBlogRes)
-
-	// update Blog
-	newBlog := &blogpb.Blog{
-		Id:       blogID,
-		AuthorId: "Changed Author",
-		Title:    "My First Blog (edited)",
-		Content:  "Content of the first blog, with some awesome additions!",
-	}
-	updateRes, updateErr := c.UpdateBlog(context.Background(), &blogpb.UpdateBlogRequest{Blog: newBlog})
-	if updateErr != nil {
-		fmt.Printf("Error happened while updating: %v \n", updateErr)
-	}
-	fmt.Printf("Blog was updated: %v\n", updateRes)
-
-	// delete Blog
-	deleteRes, deleteErr := c.DeleteBlog(context.Background(), &blogpb.DeleteBlogRequest{BlogId: blogID})
-
-	if deleteErr != nil {
-		fmt.Printf("Error happened while deleting: %v \n", deleteErr)
-	}
-	fmt.Printf("Blog was deleted: %v \n", deleteRes)
-
-	// list Blogs
-
-	stream, err := c.ListBlog(context.Background(), &blogpb.ListBlogRequest{})
 	if err != nil {
-		log.Fatalf("error while calling ListBlog RPC: %v", err)
+		log.Fatalf("Error while reading blog: %v\n", err)
+		return
 	}
+
+	fmt.Printf("Blog was read: %v\n", res)
+}
+
+func updateBlog(c blogpb.BlogServiceClient, blog *blogpb.Blog) {
+
+	req := &blogpb.UpdateBlogRequest{
+		Blog: blog,
+	}
+
+	res, err := c.UpdateBlog(context.Background(), req)
+
+	if err != nil {
+		log.Fatalf("Error while updating blog: %v\n", err)
+		return
+	}
+
+	fmt.Printf("Blog was updated: %v\n", res)
+}
+
+func deleteBlog(c blogpb.BlogServiceClient, id string) {
+
+	req := &blogpb.DeleteBlogRequest{
+		BlogId: id,
+	}
+
+	res, err := c.DeleteBlog(context.Background(), req)
+
+	if err != nil {
+		log.Fatalf("Error while deleting blog: %v\n", err)
+		return
+	}
+
+	fmt.Printf("Blog was deleted: %v\n", res)
+}
+
+func listBlog(c blogpb.BlogServiceClient) {
+
+	req := &blogpb.ListBlogRequest{}
+
+	stream, err := c.ListBlog(context.Background(), req)
+
+	if err != nil {
+		log.Fatalf("Error while listing blog: %v\n", err)
+		return
+	}
+
 	for {
 		res, err := stream.Recv()
+
 		if err == io.EOF {
 			break
 		}
+
 		if err != nil {
-			log.Fatalf("Something happened: %v", err)
+			log.Fatalf("Error while reading stream: %v\n", err)
+			return
 		}
-		fmt.Println(res.GetBlog())
+
+		blog := res.GetBlog()
+
+		fmt.Printf("Blog was read: %v\n", blog)
 	}
 }

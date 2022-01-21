@@ -8,127 +8,167 @@ import (
 	"math"
 	"net"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
-	"github.com/simplesteph/grpc-go-course/calculator/calculatorpb"
-	"google.golang.org/grpc/reflection"
+	"github.com/newtonmunene99/grpc-go-course/calculator/calculatorpb"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
-type server struct{}
+type server struct {
+	calculatorpb.CalculatorServiceServer
+}
 
 func (*server) Sum(ctx context.Context, req *calculatorpb.SumRequest) (*calculatorpb.SumResponse, error) {
-	fmt.Printf("Received Sum RPC: %v\n", req)
-	firstNumber := req.FirstNumber
-	secondNumber := req.SecondNumber
-	sum := firstNumber + secondNumber
+	fmt.Printf("Add function was invoked with %v\n", req)
+
+	a := req.GetA()
+	b := req.GetB()
+
+	sum := a + b
+
 	res := &calculatorpb.SumResponse{
-		SumResult: sum,
+		Sum: sum,
 	}
+
 	return res, nil
+
 }
 
 func (*server) PrimeNumberDecomposition(req *calculatorpb.PrimeNumberDecompositionRequest, stream calculatorpb.CalculatorService_PrimeNumberDecompositionServer) error {
-	fmt.Printf("Received PrimeNumberDecomposition RPC: %v\n", req)
+	fmt.Printf("PrimeNumberDecomposition function was invoked with %v\n", req)
 
-	number := req.GetNumber()
-	divisor := int64(2)
+	divisor := int32(2)
+	num := req.GetNumber()
 
-	for number > 1 {
-		if number%divisor == 0 {
-			stream.Send(&calculatorpb.PrimeNumberDecompositionResponse{
+	for num > 1 {
+		if num%divisor == 0 {
+			num = num / divisor
+			res := &calculatorpb.PrimeNumberDecompositionResponse{
 				PrimeFactor: divisor,
-			})
-			number = number / divisor
+			}
+			stream.Send(res)
 		} else {
 			divisor++
-			fmt.Printf("Divisor has increased to %v\n", divisor)
 		}
 	}
+
 	return nil
 }
 
 func (*server) ComputeAverage(stream calculatorpb.CalculatorService_ComputeAverageServer) error {
-	fmt.Printf("Received ComputeAverage RPC\n")
 
-	sum := int32(0)
-	count := 0
+	fmt.Printf("ComputeAverage function was invoked with a streaming request\n")
+
+	numbers := []int32{}
 
 	for {
 		req, err := stream.Recv()
+
 		if err == io.EOF {
-			average := float64(sum) / float64(count)
-			return stream.SendAndClose(&calculatorpb.ComputeAverageResponse{
+
+			total := int32(0)
+			for _, number := range numbers {
+				total += number
+			}
+
+			average := float64(total) / float64(len(numbers))
+
+			res := &calculatorpb.ComputeAverageResponse{
 				Average: average,
-			})
+			}
+
+			return stream.SendAndClose(res)
+
 		}
+
 		if err != nil {
 			log.Fatalf("Error while reading client stream: %v", err)
 		}
-		sum += req.GetNumber()
-		count++
-	}
 
+		number := req.GetNumber()
+
+		numbers = append(numbers, number)
+	}
 }
 
 func (*server) FindMaximum(stream calculatorpb.CalculatorService_FindMaximumServer) error {
-	fmt.Println("Received FindMaximum RPC")
-	maximum := int32(0)
+
+	fmt.Printf("ComputeAverage function was invoked with a streaming request\n")
+
+	max := int32(0)
 
 	for {
-		req, err := stream.Recv()
+		msg, err := stream.Recv()
+
 		if err == io.EOF {
 			return nil
 		}
+
 		if err != nil {
 			log.Fatalf("Error while reading client stream: %v", err)
 			return err
 		}
-		number := req.GetNumber()
-		if number > maximum {
-			maximum = number
-			sendErr := stream.Send(&calculatorpb.FindMaximumResponse{
-				Maximum: maximum,
-			})
+
+		number := msg.GetNumber()
+
+		if number > max {
+			max = number
+
+			res := &calculatorpb.FindMaximumResponse{
+				Maximum: max,
+			}
+
+			sendErr := stream.SendMsg(res)
+
 			if sendErr != nil {
 				log.Fatalf("Error while sending data to client: %v", sendErr)
 				return sendErr
 			}
 		}
+
 	}
 }
 
 func (*server) SquareRoot(ctx context.Context, req *calculatorpb.SquareRootRequest) (*calculatorpb.SquareRootResponse, error) {
-	fmt.Println("Received SquareRoot RPC")
+	fmt.Printf("SquareRoot function was invoked with %v\n", req)
+
 	number := req.GetNumber()
+
 	if number < 0 {
 		return nil, status.Errorf(
 			codes.InvalidArgument,
-			fmt.Sprintf("Received a negative number: %v", number),
+			fmt.Sprintf("Received a negative number: %v\n", number),
 		)
 	}
-	return &calculatorpb.SquareRootResponse{
-		NumberRoot: math.Sqrt(float64(number)),
-	}, nil
+
+	res := &calculatorpb.SquareRootResponse{
+		SquareRoot: math.Sqrt(float64(number)),
+	}
+
+	return res, nil
+
 }
 
 func main() {
+
 	fmt.Println("Calculator Server")
 
-	lis, err := net.Listen("tcp", "0.0.0.0:50051")
+	lis, err := net.Listen("tcp", ":50051")
+
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
 
 	s := grpc.NewServer()
+
 	calculatorpb.RegisterCalculatorServiceServer(s, &server{})
 
-	// Register reflection service on gRPC server.
 	reflection.Register(s)
 
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
+
 }

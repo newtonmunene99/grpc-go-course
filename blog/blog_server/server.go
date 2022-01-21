@@ -7,22 +7,21 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"time"
 
-	"gopkg.in/mgo.v2/bson"
-
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
-
+	"github.com/newtonmunene99/grpc-go-course/blog/blogpb"
+	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
-
-	"github.com/simplesteph/grpc-go-course/blog/blogpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
-var collection *mongo.Collection
+var blogCollection *mongo.Collection
 
 type server struct {
 	blogpb.BlogServiceServer
@@ -36,234 +35,345 @@ type blogItem struct {
 }
 
 func (*server) CreateBlog(ctx context.Context, req *blogpb.CreateBlogRequest) (*blogpb.CreateBlogResponse, error) {
-	fmt.Println("Create blog request")
+
+	fmt.Printf("Create blog request: %v\n", req)
+
 	blog := req.GetBlog()
 
 	data := blogItem{
 		AuthorID: blog.GetAuthorId(),
-		Title:    blog.GetTitle(),
-		Content:  blog.GetContent(),
+		Title:    blog.GetContent(),
+		Content:  blog.GetTitle(),
 	}
 
-	res, err := collection.InsertOne(ctx, data)
+	res, err := blogCollection.InsertOne(context.Background(), data)
+
 	if err != nil {
-		return nil, status.Errorf(
-			codes.Internal,
-			fmt.Sprintf("Internal error: %v", err),
-		)
+		log.Fatalf("Failed to insert to DB: %v", err)
+		return nil, status.Errorf(codes.Internal, fmt.Sprintf("Internal error: %v", err))
 	}
+
 	oid, ok := res.InsertedID.(primitive.ObjectID)
+
 	if !ok {
 		return nil, status.Errorf(
 			codes.Internal,
-			fmt.Sprintf("Cannot convert to OID"),
+			"Cannot convert to OID",
 		)
 	}
 
-	return &blogpb.CreateBlogResponse{
+	resp := &blogpb.CreateBlogResponse{
 		Blog: &blogpb.Blog{
 			Id:       oid.Hex(),
 			AuthorId: blog.GetAuthorId(),
 			Title:    blog.GetTitle(),
 			Content:  blog.GetContent(),
 		},
-	}, nil
+	}
 
+	return resp, nil
 }
 
 func (*server) ReadBlog(ctx context.Context, req *blogpb.ReadBlogRequest) (*blogpb.ReadBlogResponse, error) {
-	fmt.Println("Read blog request")
+
+	fmt.Printf("Read blog request: %v\n", req)
 
 	blogID := req.GetBlogId()
+
 	oid, err := primitive.ObjectIDFromHex(blogID)
+
 	if err != nil {
 		return nil, status.Errorf(
 			codes.InvalidArgument,
-			fmt.Sprintf("Cannot parse ID"),
+			"Cannot parse ID",
 		)
 	}
 
-	// create an empty struct
 	data := &blogItem{}
-	filter := bson.M{"_id": oid}
+	filter := bson.D{
+		{
+			Key:   "_id",
+			Value: oid,
+		},
+	}
 
-	res := collection.FindOne(ctx, filter)
-	if err := res.Decode(data); err != nil {
+	findErr := blogCollection.FindOne(context.Background(), filter).Decode(data)
+
+	if findErr == mongo.ErrNoDocuments {
 		return nil, status.Errorf(
 			codes.NotFound,
-			fmt.Sprintf("Cannot find blog with specified ID: %v", err),
+			fmt.Sprintf("Cannot find blog with specified ID: %s", blogID),
 		)
 	}
 
-	return &blogpb.ReadBlogResponse{
-		Blog: dataToBlogPb(data),
-	}, nil
-}
-
-func dataToBlogPb(data *blogItem) *blogpb.Blog {
-	return &blogpb.Blog{
-		Id:       data.ID.Hex(),
-		AuthorId: data.AuthorID,
-		Content:  data.Content,
-		Title:    data.Title,
+	if findErr != nil {
+		return nil, status.Errorf(
+			codes.Internal,
+			fmt.Sprintf("Internal error: %v", findErr),
+		)
 	}
+
+	resp := &blogpb.ReadBlogResponse{
+		Blog: &blogpb.Blog{
+			Id:       data.ID.Hex(),
+			AuthorId: data.AuthorID,
+			Title:    data.Title,
+			Content:  data.Content,
+		},
+	}
+
+	return resp, nil
+
 }
 
 func (*server) UpdateBlog(ctx context.Context, req *blogpb.UpdateBlogRequest) (*blogpb.UpdateBlogResponse, error) {
-	fmt.Println("Update blog request")
+	fmt.Printf("Update blog request: %v\n", req)
+
 	blog := req.GetBlog()
-	oid, err := primitive.ObjectIDFromHex(blog.GetId())
+	blogID := blog.GetId()
+
+	oid, err := primitive.ObjectIDFromHex(blogID)
+
 	if err != nil {
 		return nil, status.Errorf(
 			codes.InvalidArgument,
-			fmt.Sprintf("Cannot parse ID"),
+			fmt.Sprintf("Cannot parse ID: %v", blogID),
 		)
 	}
 
-	// create an empty struct
 	data := &blogItem{}
-	filter := bson.M{"_id": oid}
+	filter := bson.D{
+		{
+			Key:   "_id",
+			Value: oid,
+		},
+	}
 
-	res := collection.FindOne(ctx, filter)
-	if err := res.Decode(data); err != nil {
+	findErr := blogCollection.FindOne(context.Background(), filter).Decode(data)
+
+	if findErr == mongo.ErrNoDocuments {
 		return nil, status.Errorf(
 			codes.NotFound,
-			fmt.Sprintf("Cannot find blog with specified ID: %v", err),
+			fmt.Sprintf("Cannot find blog with specified ID: %s", blogID),
 		)
 	}
 
-	// we update our internal struct
+	if findErr != nil {
+		return nil, status.Errorf(
+			codes.Internal,
+			fmt.Sprintf("Internal error: %v", findErr),
+		)
+	}
+
 	data.AuthorID = blog.GetAuthorId()
 	data.Content = blog.GetContent()
 	data.Title = blog.GetTitle()
 
-	_, updateErr := collection.ReplaceOne(context.Background(), filter, data)
+	updateRes, updateErr := blogCollection.ReplaceOne(context.Background(), filter, data)
+
 	if updateErr != nil {
 		return nil, status.Errorf(
 			codes.Internal,
-			fmt.Sprintf("Cannot update object in MongoDB: %v", updateErr),
+			fmt.Sprintf("Internal error: %v", updateErr),
 		)
 	}
 
-	return &blogpb.UpdateBlogResponse{
-		Blog: dataToBlogPb(data),
-	}, nil
+	if updateRes.ModifiedCount == 0 {
+		return nil, status.Errorf(
+			codes.NotFound,
+			fmt.Sprintf("Cannot find blog with specified ID: %s", blogID),
+		)
+	}
+
+	resp := &blogpb.UpdateBlogResponse{
+		Blog: &blogpb.Blog{
+			Id:       data.ID.Hex(),
+			AuthorId: data.AuthorID,
+			Title:    data.Title,
+			Content:  data.Content,
+		},
+	}
+
+	return resp, nil
 
 }
 
 func (*server) DeleteBlog(ctx context.Context, req *blogpb.DeleteBlogRequest) (*blogpb.DeleteBlogResponse, error) {
-	fmt.Println("Delete blog request")
-	oid, err := primitive.ObjectIDFromHex(req.GetBlogId())
+
+	fmt.Printf("Delete blog request: %v\n", req)
+
+	blogID := req.GetBlogId()
+
+	oid, err := primitive.ObjectIDFromHex(blogID)
+
 	if err != nil {
 		return nil, status.Errorf(
 			codes.InvalidArgument,
-			fmt.Sprintf("Cannot parse ID"),
+			"Cannot parse ID",
 		)
 	}
 
-	filter := bson.M{"_id": oid}
+	filter := bson.D{
+		{
+			Key:   "_id",
+			Value: oid,
+		},
+	}
 
-	res, err := collection.DeleteOne(ctx, filter)
+	deleteRes, deleteErr := blogCollection.DeleteOne(context.Background(), filter)
 
-	if err != nil {
+	if deleteErr != nil {
 		return nil, status.Errorf(
 			codes.Internal,
-			fmt.Sprintf("Cannot delete object in MongoDB: %v", err),
+			fmt.Sprintf("Internal error: %v", deleteErr),
 		)
 	}
 
-	if res.DeletedCount == 0 {
+	if deleteRes.DeletedCount == 0 {
 		return nil, status.Errorf(
 			codes.NotFound,
-			fmt.Sprintf("Cannot find blog in MongoDB: %v", err),
+			fmt.Sprintf("Cannot find blog with specified ID: %s", blogID),
 		)
 	}
 
-	return &blogpb.DeleteBlogResponse{BlogId: req.GetBlogId()}, nil
+	resp := &blogpb.DeleteBlogResponse{
+		BlogId: blogID,
+	}
+
+	return resp, nil
 }
 
-func (*server) ListBlog(_ *blogpb.ListBlogRequest, stream blogpb.BlogService_ListBlogServer) error {
-	fmt.Println("List blog request")
+func (*server) ListBlog(req *blogpb.ListBlogRequest, stream blogpb.BlogService_ListBlogServer) error {
 
-	cur, err := collection.Find(context.Background(), primitive.D{{}})
+	fmt.Printf("List blog request: %v\n", req)
+
+	filter := bson.D{}
+
+	cur, err := blogCollection.Find(context.Background(), filter)
+
 	if err != nil {
 		return status.Errorf(
 			codes.Internal,
-			fmt.Sprintf("Unknown internal error: %v", err),
+			fmt.Sprintf("Internal error: %v", err),
 		)
 	}
-	defer cur.Close(context.Background()) // Should handle err
+
+	defer cur.Close(context.Background())
+
 	for cur.Next(context.Background()) {
 		data := &blogItem{}
-		err := cur.Decode(data)
-		if err != nil {
+
+		decodeErr := cur.Decode(data)
+
+		if decodeErr != nil {
 			return status.Errorf(
 				codes.Internal,
-				fmt.Sprintf("Error while decoding data from MongoDB: %v", err),
+				fmt.Sprintf("Error while decoding data: %v", decodeErr),
 			)
-
 		}
-		stream.Send(&blogpb.ListBlogResponse{Blog: dataToBlogPb(data)}) // Should handle err
+
+		resp := &blogpb.ListBlogResponse{
+			Blog: &blogpb.Blog{
+				Id:       data.ID.Hex(),
+				AuthorId: data.AuthorID,
+				Title:    data.Title,
+				Content:  data.Content,
+			},
+		}
+
+		stream.Send(resp)
 	}
+
 	if err := cur.Err(); err != nil {
 		return status.Errorf(
 			codes.Internal,
-			fmt.Sprintf("Unknown internal error: %v", err),
+			fmt.Sprintf("Internal error: %v", err),
 		)
 	}
+
 	return nil
 }
 
 func main() {
-	// if we crash the go code, we get the file name and line number
+	// If we crash the go code, we get the file name and line number
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 
-	fmt.Println("Connecting to MongoDB")
-	// connect to MongoDB
-	client, err := mongo.NewClient(options.Client().ApplyURI("mongodb://localhost:27017"))
+	fmt.Println("Blog Server Started")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+
+	defer cancel()
+
+	fmt.Println("Connecting to Mongo")
+
+	mongoClient, err := mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+
 	if err != nil {
-		log.Fatal(err)
-	}
-	err = client.Connect(context.TODO())
-	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("Failed to connect to mongo: %v", err)
 	}
 
-	fmt.Println("Blog Service Started")
-	collection = client.Database("mydb").Collection("blog")
+	defer func() {
+		fmt.Println("Closing Mongo connection")
 
-	lis, err := net.Listen("tcp", "0.0.0.0:50051")
+		if err = mongoClient.Disconnect(ctx); err != nil {
+			panic(err)
+		}
+	}()
+
+	fmt.Println("Connected to MongoDB")
+
+	blogCollection = mongoClient.Database("grpc-go-course").Collection("blog")
+
+	lis, err := net.Listen("tcp", ":50051")
+
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
 	}
 
-	var opts []grpc.ServerOption
+	tls := false
+	opts := []grpc.ServerOption{}
+
+	if tls {
+		certFile := "ssl/server.crt"
+
+		keyFile := "ssl/server.pem"
+
+		creds, sslErr := credentials.NewServerTLSFromFile(certFile, keyFile)
+
+		if sslErr != nil {
+			log.Fatalf("Fialed loading certificates: %v\n", sslErr)
+			return
+		}
+
+		opts = append(opts, grpc.Creds(creds))
+	}
+
 	s := grpc.NewServer(opts...)
+
 	blogpb.RegisterBlogServiceServer(s, &server{})
-	// Register reflection service on gRPC server.
+
 	reflection.Register(s)
 
 	go func() {
-		fmt.Println("Starting Server...")
+		fmt.Println("Starting Server")
+
 		if err := s.Serve(lis); err != nil {
 			log.Fatalf("failed to serve: %v", err)
 		}
+
 	}()
 
-	// Wait for Control C to exit
+	// Wait for exit
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt)
 
 	// Block until a signal is received
 	<-ch
-	// First we close the connection with MongoDB:
-	fmt.Println("Closing MongoDB Connection")
-	if err := client.Disconnect(context.TODO()); err != nil {
-		log.Fatalf("Error on disconnection with MongoDB : %v", err)
-	}
 
-	// Finally, we stop the server
 	fmt.Println("Stopping the server")
 	s.Stop()
-	fmt.Println("End of Program")
+	fmt.Println("Closing the listener")
+	lis.Close()
+
+	fmt.Println("Server stopped")
 }

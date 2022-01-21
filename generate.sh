@@ -1,5 +1,7 @@
 #!/bin/bash
 
-protoc greet/greetpb/greet.proto --go_out=plugins=grpc:.
-protoc calculator/calculatorpb/calculator.proto --go_out=plugins=grpc:.
-protoc blog/blogpb/blog.proto --go_out=plugins=grpc:.
+protoc --go_out=. --go-grpc_out=. greet/greetpb/greet.proto
+
+protoc --go_out=. --go-grpc_out=. calculator/calculatorpb/calculator.proto
+
+echo "Generated"
